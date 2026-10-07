@@ -15,6 +15,8 @@
 """R squared metric."""
 
 
+import warnings
+
 import datasets
 import numpy as np
 
@@ -50,8 +52,10 @@ Computes the R Squared metric.
 Args:
     predictions: List of predicted values of the dependent variable
     references: List of true values of the dependent variable
-    zero_division: Which value to substitute as a metric value when encountering zero division. Should be one of 0, 1,
-        "warn". "warn" acts as 0, but the warning is raised.
+    zero_division: Value to use when references have zero variance and predictions are not exact.
+        Should be one of 0, 1, or "warn". "warn" acts as 0 and emits a RuntimeWarning.
+        An exact prediction of a constant reference returns 1.0 (0/0 is a perfect fit, matching
+        sklearn.metrics.r2_score), not zero_division.
 
 Returns:
     R^2 value ranging from 0 to 1, with a higher value indicating a better fit.
@@ -83,19 +87,28 @@ class r_squared(evaluate.Metric):
             ],
         )
 
-    def _compute(self, predictions=None, references=None):
+    def _compute(self, predictions=None, references=None, zero_division=0):
         """
         Computes the coefficient of determination (R-squared) of predictions with respect to references.
 
         Parameters:
             predictions (List or np.ndarray): The predicted values.
             references (List or np.ndarray): The true/reference values.
+            zero_division (int or str): Substitute used when references are constant and predictions
+                are not exact. One of 0, 1, or "warn".
 
         Returns:
             float: The R-squared value, rounded to 3 decimal places.
         """
-        predictions = np.array(predictions)
-        references = np.array(references)
+        if zero_division not in (0, 1, "warn") and zero_division not in (0.0, 1.0):
+            raise ValueError('zero_division must be one of 0, 1, or "warn".')
+
+        predictions = np.asarray(predictions, dtype=float)
+        references = np.asarray(references, dtype=float)
+        if predictions.shape != references.shape:
+            raise ValueError(
+                f"predictions and references must have the same shape, got {predictions.shape} and {references.shape}."
+            )
 
         # Calculate mean of the references
         mean_references = np.mean(references)
@@ -106,10 +119,19 @@ class r_squared(evaluate.Metric):
         # Calculate sum of squared total
         sst = np.sum((references - mean_references) ** 2)
 
-        # Calculate R Squared
+        # Constant references make R^2 undefined (division by zero). An exact match is a
+        # perfect fit (sklearn returns 1.0); otherwise substitute zero_division instead of -inf.
+        if sst == 0:
+            if ssr == 0:
+                return 1.0
+            if zero_division == "warn":
+                warnings.warn(
+                    "R^2 is undefined because references have zero variance; substituting 0.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                return 0.0
+            return float(zero_division)
+
         r_squared = 1 - (ssr / sst)
-
-        # Round off to 3 decimal places
-        rounded_r_squared = round(r_squared, 3)
-
-        return rounded_r_squared
+        return round(float(r_squared), 3)
